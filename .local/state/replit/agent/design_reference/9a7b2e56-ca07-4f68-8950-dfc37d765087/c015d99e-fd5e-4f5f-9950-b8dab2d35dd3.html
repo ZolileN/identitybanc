@@ -1,0 +1,698 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Identity Banc - Secure ID Verification</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                borderRadius: {
+                    lg: "var(--radius)",
+                    md: "calc(var(--radius) - 2px)", 
+                    sm: "calc(var(--radius) - 4px)",
+                },
+                colors: {
+                    background: "var(--background)",
+                    foreground: "var(--foreground)",
+                    card: {
+                        DEFAULT: "var(--card)",
+                        foreground: "var(--card-foreground)",
+                    },
+                    popover: {
+                        DEFAULT: "var(--popover)",
+                        foreground: "var(--popover-foreground)",
+                    },
+                    primary: {
+                        DEFAULT: "var(--primary)",
+                        foreground: "var(--primary-foreground)",
+                    },
+                    secondary: {
+                        DEFAULT: "var(--secondary)",
+                        foreground: "var(--secondary-foreground)",
+                    },
+                    muted: {
+                        DEFAULT: "var(--muted)",
+                        foreground: "var(--muted-foreground)",
+                    },
+                    accent: {
+                        DEFAULT: "var(--accent)",
+                        foreground: "var(--accent-foreground)",
+                    },
+                    destructive: {
+                        DEFAULT: "var(--destructive)",
+                        foreground: "var(--destructive-foreground)",
+                    },
+                    border: "var(--border)",
+                    input: "var(--input)",
+                    ring: "var(--ring)",
+                    success: "var(--success)",
+                    warning: "var(--warning)",
+                }
+            }
+        }
+    };
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    
+    <style>
+        :root {
+            --background: hsl(210 40% 98%);
+            --foreground: hsl(222 84% 4.9%);
+            --card: hsl(0 0% 100%);
+            --card-foreground: hsl(222 84% 4.9%);
+            --popover: hsl(0 0% 100%);
+            --popover-foreground: hsl(222 84% 4.9%);
+            --primary: hsl(210 79% 46%);
+            --primary-foreground: hsl(210 40% 98%);
+            --secondary: hsl(210 40% 94%);
+            --secondary-foreground: hsl(222 84% 4.9%);
+            --muted: hsl(210 40% 96%);
+            --muted-foreground: hsl(215 16% 47%);
+            --accent: hsl(210 40% 94%);
+            --accent-foreground: hsl(222 84% 4.9%);
+            --destructive: hsl(0 84% 60%);
+            --destructive-foreground: hsl(210 40% 98%);
+            --border: hsl(214 32% 91%);
+            --input: hsl(214 32% 91%);
+            --ring: hsl(210 79% 46%);
+            --radius: 8px;
+            --success: hsl(122 39% 49%);
+            --warning: hsl(43 96% 56%);
+            --font-sans: 'Inter', sans-serif;
+        }
+        
+        body {
+            font-family: var(--font-sans);
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .verification-step.active {
+            background: hsl(var(--primary));
+            color: hsl(var(--primary-foreground));
+        }
+        
+        .verification-step.completed {
+            background: hsl(var(--success));
+            color: white;
+        }
+        
+        .pulse-ring {
+            animation: pulse-ring 1.5s infinite;
+        }
+        
+        @keyframes pulse-ring {
+            0% { transform: scale(.33); }
+            80%, 100% { opacity: 0; }
+        }
+        
+        .camera-preview {
+            background: linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--accent)) 100%);
+        }
+        
+        .upload-zone {
+            border: 2px dashed hsl(var(--border));
+            transition: all 0.3s ease;
+        }
+        
+        .upload-zone:hover {
+            border-color: hsl(var(--primary));
+            background: hsl(var(--muted));
+        }
+        
+        .upload-zone.dragover {
+            border-color: hsl(var(--primary));
+            background: hsl(var(--primary) / 0.1);
+        }
+    </style>
+</head>
+<body class="bg-background text-foreground">
+    <!-- @COMPONENT: Header -->
+    <header class="bg-card border-b border-border shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
+                        <i class="fas fa-shield-alt text-primary-foreground text-lg"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-foreground">Identity Banc</h1>
+                        <p class="text-xs text-muted-foreground">Secure ID Verification</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <div class="hidden sm:flex items-center space-x-2 text-sm text-muted-foreground">
+                        <i class="fas fa-lock text-success"></i>
+                        <span>POPIA Compliant</span>
+                    </div>
+                    <button class="text-muted-foreground hover:text-foreground">
+                        <i class="fas fa-question-circle text-lg"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+    <!-- @END_COMPONENT: Header -->
+
+    <main class="min-h-screen bg-background">
+        <!-- @COMPONENT: VerificationFlow -->
+        <div class="max-w-4xl mx-auto px-4 py-8">
+            
+            <!-- Progress Indicator -->
+            <div class="mb-8">
+                <div class="flex items-center justify-between relative">
+                    <div class="absolute top-1/2 left-0 right-0 h-0.5 bg-border transform -translate-y-1/2"></div>
+                    
+                    <div class="verification-step active relative z-10 w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium">
+                        <i class="fas fa-phone"></i>
+                    </div>
+                    
+                    <div class="verification-step relative z-10 w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">
+                        <i class="fas fa-id-card"></i>
+                    </div>
+                    
+                    <div class="verification-step relative z-10 w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">
+                        <i class="fas fa-camera"></i>
+                    </div>
+                    
+                    <div class="verification-step relative z-10 w-10 h-10 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-sm font-medium">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                </div>
+                
+                <div class="flex justify-between mt-3 text-sm">
+                    <span class="text-primary font-medium">Phone</span>
+                    <span class="text-muted-foreground">ID Upload</span>
+                    <span class="text-muted-foreground">Biometric</span>
+                    <span class="text-muted-foreground">Complete</span>
+                </div>
+            </div>
+
+            <!-- Phone Verification Section -->
+            <section id="phone-section" class="fade-in">
+                <div class="bg-card rounded-xl border border-border shadow-sm p-8">
+                    <div class="text-center mb-8">
+                        <div class="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <i class="fas fa-mobile-alt text-primary text-2xl"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-foreground mb-2">Verify Your Phone Number</h2>
+                        <p class="text-muted-foreground max-w-md mx-auto">We'll send you a secure verification link via WhatsApp or SMS to begin the ID verification process.</p>
+                    </div>
+
+                    <div class="max-w-md mx-auto space-y-6">
+                        <div>
+                            <label class="block text-sm font-medium text-foreground mb-2">South African Phone Number</label>
+                            <div class="relative">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <span class="text-muted-foreground">+27</span>
+                                </div>
+                                <input type="tel" 
+                                       placeholder="82 123 4567" 
+                                       class="w-full pl-12 pr-4 py-3 bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent outline-none transition-all"
+                                       data-mock="true">
+                            </div>
+                            <p class="mt-2 text-xs text-muted-foreground">We support Vodacom, MTN, Cell C, and Telkom networks</p>
+                        </div>
+
+                        <div class="bg-muted/50 rounded-lg p-4">
+                            <h3 class="font-medium text-foreground mb-2">Choose verification method:</h3>
+                            <div class="space-y-2">
+                                <label class="flex items-center">
+                                    <input type="radio" name="method" value="whatsapp" class="text-primary focus:ring-primary" checked>
+                                    <span class="ml-3 flex items-center">
+                                        <i class="fab fa-whatsapp text-green-500 mr-2"></i>
+                                        WhatsApp (Recommended)
+                                    </span>
+                                </label>
+                                <label class="flex items-center">
+                                    <input type="radio" name="method" value="sms" class="text-primary focus:ring-primary">
+                                    <span class="ml-3 flex items-center">
+                                        <i class="fas fa-sms text-blue-500 mr-2"></i>
+                                        SMS Text Message
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <button class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2"
+                                onclick="showIDSection()">
+                            <i class="fas fa-paper-plane"></i>
+                            <span>Send Verification Link</span>
+                        </button>
+
+                        <div class="text-center">
+                            <button class="text-sm text-muted-foreground hover:text-foreground underline">
+                                Use OTP instead
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Notice -->
+                <div class="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div class="flex items-start space-x-3">
+                        <i class="fas fa-shield-alt text-blue-600 mt-0.5"></i>
+                        <div>
+                            <h4 class="font-medium text-blue-900">Your data is secure</h4>
+                            <p class="text-sm text-blue-800 mt-1">All information is encrypted and processed in compliance with POPIA and GDPR regulations. We never store unnecessary personal data.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ID Upload Section -->
+            <section id="id-section" class="hidden fade-in">
+                <div class="bg-card rounded-xl border border-border shadow-sm p-8">
+                    <div class="text-center mb-8">
+                        <div class="w-16 h-16 bg-success/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <i class="fas fa-id-card text-success text-2xl"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-foreground mb-2">Upload Your SA ID Document</h2>
+                        <p class="text-muted-foreground max-w-md mx-auto">Please upload a clear photo of your South African ID book or smart card. We'll validate it against the DHA database.</p>
+                    </div>
+
+                    <div class="max-w-2xl mx-auto space-y-6">
+                        <!-- ID Type Selection -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="border border-input rounded-lg p-4 cursor-pointer hover:border-primary transition-colors" onclick="selectIDType('book')">
+                                <div class="flex items-center space-x-3">
+                                    <input type="radio" name="id-type" value="book" class="text-primary focus:ring-primary">
+                                    <div class="flex-1">
+                                        <h3 class="font-medium text-foreground">SA ID Book</h3>
+                                        <p class="text-sm text-muted-foreground">Green booklet with photo page</p>
+                                    </div>
+                                    <i class="fas fa-book text-green-600 text-xl"></i>
+                                </div>
+                            </div>
+                            
+                            <div class="border border-input rounded-lg p-4 cursor-pointer hover:border-primary transition-colors" onclick="selectIDType('card')">
+                                <div class="flex items-center space-x-3">
+                                    <input type="radio" name="id-type" value="card" class="text-primary focus:ring-primary">
+                                    <div class="flex-1">
+                                        <h3 class="font-medium text-foreground">Smart ID Card</h3>
+                                        <p class="text-sm text-muted-foreground">Plastic card format</p>
+                                    </div>
+                                    <i class="fas fa-credit-card text-blue-600 text-xl"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Upload Zone -->
+                        <div class="upload-zone rounded-xl p-8 text-center cursor-pointer" onclick="document.getElementById('id-upload').click()">
+                            <div class="max-w-sm mx-auto">
+                                <i class="fas fa-cloud-upload-alt text-4xl text-muted-foreground mb-4"></i>
+                                <h3 class="text-lg font-medium text-foreground mb-2">Drop your ID document here</h3>
+                                <p class="text-sm text-muted-foreground mb-4">or click to browse your device</p>
+                                <div class="flex items-center justify-center space-x-4 text-xs text-muted-foreground">
+                                    <span>📱 JPG</span>
+                                    <span>📱 PNG</span>
+                                    <span>📱 PDF</span>
+                                    <span>Max 10MB</span>
+                                </div>
+                            </div>
+                            <input type="file" id="id-upload" class="hidden" accept="image/*,.pdf" onchange="handleIDUpload(this)">
+                        </div>
+
+                        <!-- Upload Guidelines -->
+                        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                            <h4 class="font-medium text-amber-900 mb-2 flex items-center">
+                                <i class="fas fa-lightbulb mr-2"></i>
+                                Photo Guidelines
+                            </h4>
+                            <ul class="text-sm text-amber-800 space-y-1">
+                                <li>• Ensure all text is clearly readable</li>
+                                <li>• Avoid shadows, glare, or blurred areas</li>
+                                <li>• Capture the entire document within the frame</li>
+                                <li>• Use good lighting for best results</li>
+                            </ul>
+                        </div>
+
+                        <!-- Uploaded File Preview -->
+                        <div id="upload-preview" class="hidden border border-border rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-3">
+                                    <i class="fas fa-file-image text-primary text-xl"></i>
+                                    <div>
+                                        <p class="font-medium text-foreground" id="file-name">sa_id_document.jpg</p>
+                                        <p class="text-sm text-muted-foreground">2.3 MB • Uploaded</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-sm text-success">✓ Valid format</span>
+                                    <button class="text-destructive hover:text-destructive/80" onclick="removeUpload()">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2"
+                                onclick="showBiometricSection()">
+                            <i class="fas fa-search"></i>
+                            <span>Validate ID Document</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Biometric Verification Section -->
+            <section id="biometric-section" class="hidden fade-in">
+                <div class="bg-card rounded-xl border border-border shadow-sm p-8">
+                    <div class="text-center mb-8">
+                        <div class="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <i class="fas fa-user-check text-purple-600 text-2xl"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-foreground mb-2">Biometric Verification</h2>
+                        <p class="text-muted-foreground max-w-md mx-auto">We'll now verify that you are the person in the ID document using liveness detection.</p>
+                    </div>
+
+                    <div class="max-w-lg mx-auto space-y-6">
+                        <!-- Camera Preview -->
+                        <div class="camera-preview rounded-xl p-8 text-center">
+                            <div class="relative inline-block">
+                                <div class="w-64 h-80 bg-muted/30 rounded-2xl border-4 border-dashed border-muted-foreground/30 flex items-center justify-center">
+                                    <div class="text-center">
+                                        <i class="fas fa-video text-4xl text-muted-foreground mb-4"></i>
+                                        <p class="text-muted-foreground">Camera Preview</p>
+                                        <p class="text-xs text-muted-foreground mt-2">Position your face in the frame</p>
+                                    </div>
+                                </div>
+                                
+                                <!-- Pulse ring animation -->
+                                <div class="absolute inset-0 rounded-2xl border-4 border-primary/30 pulse-ring"></div>
+                            </div>
+                        </div>
+
+                        <!-- Liveness Instructions -->
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-6">
+                            <h3 class="font-medium text-blue-900 mb-3 flex items-center">
+                                <i class="fas fa-eye mr-2"></i>
+                                Liveness Detection Steps
+                            </h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">1</div>
+                                    <span class="text-blue-800">Look directly at the camera</span>
+                                </div>
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-6 h-6 bg-muted text-muted-foreground rounded-full flex items-center justify-center text-xs font-bold">2</div>
+                                    <span class="text-muted-foreground">Blink twice when prompted</span>
+                                </div>
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-6 h-6 bg-muted text-muted-foreground rounded-full flex items-center justify-center text-xs font-bold">3</div>
+                                    <span class="text-muted-foreground">Turn head left and right</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Camera Controls -->
+                        <div class="flex justify-center space-x-4">
+                            <button class="bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center space-x-2"
+                                    onclick="startLivenessCheck()">
+                                <i class="fas fa-play"></i>
+                                <span>Start Verification</span>
+                            </button>
+                            
+                            <button class="bg-secondary hover:bg-secondary/80 text-secondary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center space-x-2">
+                                <i class="fas fa-cog"></i>
+                                <span>Camera Settings</span>
+                            </button>
+                        </div>
+
+                        <!-- Privacy Notice -->
+                        <div class="text-center text-xs text-muted-foreground">
+                            <i class="fas fa-lock mr-1"></i>
+                            Your biometric data is processed locally and immediately deleted after verification
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Verification Complete Section -->
+            <section id="complete-section" class="hidden fade-in">
+                <div class="bg-card rounded-xl border border-border shadow-sm p-8">
+                    <div class="text-center mb-8">
+                        <div class="w-20 h-20 bg-success/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <i class="fas fa-check-circle text-success text-3xl"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-foreground mb-2">Verification Complete!</h2>
+                        <p class="text-muted-foreground max-w-md mx-auto">Your identity has been successfully verified and is now ready for use with our partner institutions.</p>
+                    </div>
+
+                    <div class="max-w-2xl mx-auto space-y-6">
+                        <!-- Verification Results -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                                <i class="fas fa-id-card text-green-600 text-2xl mb-2"></i>
+                                <h3 class="font-medium text-green-900">ID Validated</h3>
+                                <p class="text-sm text-green-700">DHA database confirmed</p>
+                            </div>
+                            
+                            <div class="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                                <i class="fas fa-user-check text-green-600 text-2xl mb-2"></i>
+                                <h3 class="font-medium text-green-900">Face Matched</h3>
+                                <p class="text-sm text-green-700">98.7% confidence</p>
+                            </div>
+                            
+                            <div class="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                                <i class="fas fa-shield-alt text-green-600 text-2xl mb-2"></i>
+                                <h3 class="font-medium text-green-900">Fraud Check</h3>
+                                <p class="text-sm text-green-700">No issues detected</p>
+                            </div>
+                        </div>
+
+                        <!-- Verification Details -->
+                        <div class="bg-muted/30 rounded-lg p-6">
+                            <h3 class="font-medium text-foreground mb-4">Verification Summary</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span class="text-muted-foreground">Verification ID:</span>
+                                    <span class="font-mono ml-2" data-mock="true">VER-2024-001234</span>
+                                </div>
+                                <div>
+                                    <span class="text-muted-foreground">Completed:</span>
+                                    <span class="ml-2" data-mock="true">2024-03-15 14:23 SAST</span>
+                                </div>
+                                <div>
+                                    <span class="text-muted-foreground">Valid Until:</span>
+                                    <span class="ml-2" data-mock="true">2024-06-15</span>
+                                </div>
+                                <div>
+                                    <span class="text-muted-foreground">Compliance:</span>
+                                    <span class="ml-2 text-success">POPIA Compliant</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Next Steps -->
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-6">
+                            <h3 class="font-medium text-blue-900 mb-3">What's Next?</h3>
+                            <ul class="text-sm text-blue-800 space-y-2">
+                                <li class="flex items-center">
+                                    <i class="fas fa-arrow-right text-blue-600 mr-2"></i>
+                                    Your verification is now available to authorized partners
+                                </li>
+                                <li class="flex items-center">
+                                    <i class="fas fa-arrow-right text-blue-600 mr-2"></i>
+                                    You'll receive email confirmation with verification details
+                                </li>
+                                <li class="flex items-center">
+                                    <i class="fas fa-arrow-right text-blue-600 mr-2"></i>
+                                    No further action required - the process is complete
+                                </li>
+                            </ul>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                            <button class="bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2">
+                                <i class="fas fa-download"></i>
+                                <span>Download Certificate</span>
+                            </button>
+                            
+                            <button class="bg-secondary hover:bg-secondary/80 text-secondary-foreground font-medium py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2">
+                                <i class="fas fa-share"></i>
+                                <span>Share Verification</span>
+                            </button>
+                            
+                            <button class="text-primary hover:text-primary/80 font-medium py-3 px-6 rounded-lg transition-colors flex items-center justify-center space-x-2"
+                                    onclick="resetVerification()">
+                                <i class="fas fa-redo"></i>
+                                <span>Start New Verification</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <!-- @END_COMPONENT: VerificationFlow -->
+    </main>
+
+    <!-- @COMPONENT: Footer -->
+    <footer class="bg-card border-t border-border mt-16">
+        <div class="max-w-7xl mx-auto px-4 py-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <div class="flex items-center space-x-2 mb-4">
+                        <div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                            <i class="fas fa-shield-alt text-primary-foreground"></i>
+                        </div>
+                        <span class="font-bold text-foreground">Identity Banc</span>
+                    </div>
+                    <p class="text-sm text-muted-foreground">Secure, compliant identity verification for South Africa.</p>
+                </div>
+                
+                <div>
+                    <h3 class="font-medium text-foreground mb-3">Legal</h3>
+                    <ul class="space-y-2 text-sm text-muted-foreground">
+                        <li><a href="#" class="hover:text-foreground">Privacy Policy</a></li>
+                        <li><a href="#" class="hover:text-foreground">Terms of Service</a></li>
+                        <li><a href="#" class="hover:text-foreground">POPIA Compliance</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="font-medium text-foreground mb-3">Support</h3>
+                    <ul class="space-y-2 text-sm text-muted-foreground">
+                        <li><a href="#" class="hover:text-foreground">Help Center</a></li>
+                        <li><a href="#" class="hover:text-foreground">Contact Us</a></li>
+                        <li><a href="#" class="hover:text-foreground">API Documentation</a></li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="font-medium text-foreground mb-3">Security</h3>
+                    <div class="space-y-2 text-sm text-muted-foreground">
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-lock text-success"></i>
+                            <span>256-bit SSL</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-shield-alt text-success"></i>
+                            <span>POPIA Certified</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-server text-success"></i>
+                            <span>Local Data Centers</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="border-t border-border mt-8 pt-6 text-center text-sm text-muted-foreground">
+                <p>&copy; 2024 Identity Banc. All rights reserved. Made in South Africa 🇿🇦</p>
+            </div>
+        </div>
+    </footer>
+    <!-- @END_COMPONENT: Footer -->
+
+    <script>
+        (function() {
+            // TODO: Implement proper state management and API integration
+            
+            function showIDSection() {
+                document.getElementById('phone-section').classList.add('hidden');
+                document.getElementById('id-section').classList.remove('hidden');
+                updateProgress(2);
+            }
+            
+            function showBiometricSection() {
+                document.getElementById('id-section').classList.add('hidden');
+                document.getElementById('biometric-section').classList.remove('hidden');
+                updateProgress(3);
+            }
+            
+            function showCompleteSection() {
+                document.getElementById('biometric-section').classList.add('hidden');
+                document.getElementById('complete-section').classList.remove('hidden');
+                updateProgress(4);
+            }
+            
+            function updateProgress(step) {
+                const steps = document.querySelectorAll('.verification-step');
+                steps.forEach((stepEl, index) => {
+                    stepEl.classList.remove('active', 'completed');
+                    if (index + 1 < step) {
+                        stepEl.classList.add('completed');
+                    } else if (index + 1 === step) {
+                        stepEl.classList.add('active');
+                    }
+                });
+            }
+            
+            function selectIDType(type) {
+                document.querySelector(`input[value="${type}"]`).checked = true;
+            }
+            
+            function handleIDUpload(input) {
+                if (input.files && input.files[0]) {
+                    const file = input.files[0];
+                    document.getElementById('file-name').textContent = file.name;
+                    document.getElementById('upload-preview').classList.remove('hidden');
+                }
+            }
+            
+            function removeUpload() {
+                document.getElementById('id-upload').value = '';
+                document.getElementById('upload-preview').classList.add('hidden');
+            }
+            
+            function startLivenessCheck() {
+                // TODO: Implement camera access and liveness detection
+                setTimeout(() => {
+                    showCompleteSection();
+                }, 3000);
+            }
+            
+            function resetVerification() {
+                document.getElementById('complete-section').classList.add('hidden');
+                document.getElementById('phone-section').classList.remove('hidden');
+                updateProgress(1);
+            }
+            
+            // Drag and drop functionality
+            const uploadZone = document.querySelector('.upload-zone');
+            
+            uploadZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadZone.classList.add('dragover');
+            });
+            
+            uploadZone.addEventListener('dragleave', () => {
+                uploadZone.classList.remove('dragover');
+            });
+            
+            uploadZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadZone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    document.getElementById('id-upload').files = files;
+                    handleIDUpload(document.getElementById('id-upload'));
+                }
+            });
+            
+            // Make functions globally available
+            window.showIDSection = showIDSection;
+            window.showBiometricSection = showBiometricSection;
+            window.showCompleteSection = showCompleteSection;
+            window.selectIDType = selectIDType;
+            window.handleIDUpload = handleIDUpload;
+            window.removeUpload = removeUpload;
+            window.startLivenessCheck = startLivenessCheck;
+            window.resetVerification = resetVerification;
+        })();
+    </script>
+</body>
+</html>
