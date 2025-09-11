@@ -18,6 +18,7 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
   const [cameraStarted, setCameraStarted] = useState(false);
   const [currentInstruction, setCurrentInstruction] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const { toast } = useToast();
 
@@ -56,31 +57,144 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
     },
   });
 
+  useEffect(() => {
+    const videoElement = videoRef.current;
+    if (!videoElement) return;
+
+    const handleCanPlay = () => {
+      setIsVideoReady(true);
+    };
+
+    videoElement.addEventListener('canplay', handleCanPlay);
+    
+    return () => {
+      videoElement.removeEventListener('canplay', handleCanPlay);
+      stopCamera();
+    };
+  }, []);
+
   const startVerification = async () => {
-    try {
-      setCameraStarted(true);
-      await startCamera(videoRef.current!);
-      
-      // Start liveness detection sequence
-      setTimeout(() => performLivenessCheck(), 1000);
-    } catch (error) {
+    const videoElement = videoRef.current;
+    
+    if (!videoElement) {
       toast({
-        title: "Camera error",
-        description: "Failed to access camera. Please check permissions and try again.",
+        title: "Camera Error",
+        description: "Video element is not available. Please try refreshing the page.",
         variant: "destructive",
       });
+      return;
+    }
+
+    try {
+      setCameraStarted(true);
+      setIsVideoReady(false);
+      
+      // Ensure the video element is visible and properly sized
+      videoElement.style.display = 'block';
+      videoElement.style.width = '100%';
+      videoElement.style.height = 'auto';
+      
+      // Start camera with error handling
+      try {
+        await startCamera(videoElement);
+      } catch (error) {
+        console.error('Camera initialization error:', error);
+        throw error;
+      }
+
+      // Wait for video to be ready to play
+      await new Promise<void>((resolve, reject) => {
+        if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
+          resolve();
+          return;
+        }
+
+        const onCanPlay = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = (e: Event) => {
+          cleanup();
+          reject(new Error('Video playback error'));
+        };
+
+        const cleanup = () => {
+          videoElement.removeEventListener('canplay', onCanPlay);
+          videoElement.removeEventListener('error', onError);
+          clearTimeout(timeout);
+        };
+
+        videoElement.addEventListener('canplay', onCanPlay, { once: true });
+        videoElement.addEventListener('error', onError, { once: true });
+        
+        const timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error('Video playback timed out'));
+        }, 5000);
+      });
+      
+      // Start liveness detection sequence after a short delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await performLivenessCheck();
+      
+    } catch (error) {
+      console.error('Verification error:', error);
       setCameraStarted(false);
+      stopCamera();
+      
+      let errorMessage = 'Failed to access camera. Please check permissions and try again.';
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          errorMessage = 'Camera access was denied. Please allow camera access to continue.';
+        } else if (error.name === 'NotFoundError') {
+          errorMessage = 'No camera found. Please connect a camera and try again.';
+        } else if (error.message.includes('Video element')) {
+          errorMessage = 'Video element is not available. Please refresh the page and try again.';
+        } else if (error.message.includes('timed out')) {
+          errorMessage = 'Camera is taking too long to start. Please try again.';
+        }
+      }
+      
+      toast({
+        title: "Camera Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
   const performLivenessCheck = async () => {
-    if (!videoRef.current) return;
-    
+    if (!videoRef.current) {
+      toast({
+        title: "Verification Error",
+        description: "Video element is not available",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if video is actually playing
+    if (videoRef.current.paused || videoRef.current.readyState < 2) {
+      toast({
+        title: "Camera Not Ready",
+        description: "Please wait for the camera to initialize",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsProcessing(true);
     
     try {
       // Capture frame for analysis
       const faceImageData = captureFrame(videoRef.current);
+      
+      // Verify we got valid image data
+      if (!faceImageData || faceImageData === 'data:,') {
+        throw new Error('Failed to capture frame from camera');
+      }
       
       // Perform liveness detection
       const livenessData = await detectLiveness(videoRef.current);
@@ -90,16 +204,33 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
         faceImageData,
         livenessData
       });
+      
     } catch (error) {
+      console.error('Liveness check error:', error);
+      
+      let errorMessage = 'Could not complete liveness detection. Please try again.';
+      
+      if (error instanceof Error) {
+        if (error.message.includes('permission')) {
+          errorMessage = 'Camera permission denied. Please allow camera access and try again.';
+        } else if (error.message.includes('face') || error.message.includes('detect')) {
+          errorMessage = 'Could not detect face. Please ensure your face is clearly visible.';
+        } else if (error.message.includes('frame')) {
+          errorMessage = 'Failed to capture image. Please try again.';
+        }
+      }
+      
       toast({
-        title: "Detection failed",
-        description: "Could not complete liveness detection. Please try again.",
+        title: "Verification Failed",
+        description: errorMessage,
         variant: "destructive",
       });
-    } finally {
-      setIsProcessing(false);
+      
+      // Stop camera on error to reset the state
       stopCamera();
       setCameraStarted(false);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -128,34 +259,34 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
           {/* Camera Preview */}
           <div className="camera-preview rounded-xl p-8 text-center" data-testid="camera-preview">
             <div className="relative inline-block">
-              {cameraStarted ? (
-                <div className="relative">
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    muted
-                    playsInline
-                    className="w-64 h-80 bg-muted/30 rounded-2xl object-cover"
-                    data-testid="video-camera-feed"
-                  />
-                  {isProcessing && (
-                    <div className="absolute inset-0 bg-black/50 rounded-2xl flex items-center justify-center">
-                      <div className="text-white text-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
-                        <p>Processing...</p>
-                      </div>
-                    </div>
-                  )}
-                  <div className="absolute inset-0 rounded-2xl border-4 border-primary/30 pulse-ring"></div>
-                </div>
-              ) : (
-                <div className="w-64 h-80 bg-muted/30 rounded-2xl border-4 border-dashed border-muted-foreground/30 flex items-center justify-center">
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                style={{ display: cameraStarted ? "block" : "none" }}
+                className="w-64 h-80 bg-muted/30 rounded-2xl object-cover"
+                data-testid="video-camera-feed"
+              />
+              {!cameraStarted && (
+                <div className="absolute inset-0 w-64 h-80 bg-muted/30 rounded-2xl border-4 border-dashed border-muted-foreground/30 flex items-center justify-center">
                   <div className="text-center">
                     <div className="text-4xl mb-4">🎥</div>
                     <p className="text-muted-foreground" data-testid="text-camera-placeholder">Camera Preview</p>
                     <p className="text-xs text-muted-foreground mt-2">Position your face in the frame</p>
                   </div>
                 </div>
+              )}
+              {cameraStarted && isProcessing && (
+                <div className="absolute inset-0 bg-black/50 rounded-2xl flex items-center justify-center">
+                  <div className="text-white text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
+                    <p>Processing...</p>
+                  </div>
+                </div>
+              )}
+              {cameraStarted && (
+                <div className="absolute inset-0 rounded-2xl border-4 border-primary/30 pulse-ring"></div>
               )}
             </div>
           </div>
