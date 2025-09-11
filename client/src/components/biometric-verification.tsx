@@ -8,6 +8,9 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { startCamera, stopCamera, captureFrame } from "@/lib/camera";
 import { detectLiveness } from "@/lib/face-detection";
+import { loadFaceApiModels } from "@/lib/face-api-loader";
+import { waitForBlink } from "@/lib/blink-detection";
+import { waitForHeadTurn } from "@/lib/head-turn-detection";
 
 interface BiometricVerificationProps {
   sessionId: string;
@@ -17,6 +20,7 @@ interface BiometricVerificationProps {
 export default function BiometricVerification({ sessionId, onNext }: BiometricVerificationProps) {
   const [cameraStarted, setCameraStarted] = useState(false);
   const [currentInstruction, setCurrentInstruction] = useState(0);
+  const [completedSteps, setCompletedSteps] = useState<boolean[]>([false, false, false]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -175,36 +179,39 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
       return;
     }
 
-    // Check if video is actually playing
-    if (videoRef.current.paused || videoRef.current.readyState < 2) {
-      toast({
-        title: "Camera Not Ready",
-        description: "Please wait for the camera to initialize",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setIsProcessing(true);
-    
+
     try {
-      // Capture frame for analysis
-      const faceImageData = captureFrame(videoRef.current);
-      
-      // Verify we got valid image data
-      if (!faceImageData || faceImageData === 'data:,') {
-        throw new Error('Failed to capture frame from camera');
-      }
-      
-      // Perform liveness detection
-      const livenessData = await detectLiveness(videoRef.current);
-      
-      // Submit to backend
+      await loadFaceApiModels();
+
+      // Step 1: Look directly at the camera
+      setCurrentInstruction(0);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      let faceImageData = captureFrame(videoRef.current);
+      if (!faceImageData || faceImageData === 'data:,') throw new Error('Failed to capture frame from camera');
+      let livenessData = await detectLiveness(videoRef.current);
+      setCompletedSteps([true, false, false]);
+
+      // Step 2: Blink twice
+      setCurrentInstruction(1);
+      toast({ title: "Blink twice", description: "Please blink twice for the camera." });
+      const blinked = await waitForBlink(videoRef.current, 2, 8000);
+      if (!blinked) throw new Error('Blink not detected');
+      setCompletedSteps([true, true, false]);
+
+      // Step 3: Turn head left and right
+      setCurrentInstruction(2);
+      toast({ title: "Turn head", description: "Please turn your head left and right." });
+      const turned = await waitForHeadTurn(videoRef.current, 8000);
+      if (!turned) throw new Error('Head turn not detected');
+      setCompletedSteps([true, true, true]);
+
+      // Submit after all steps
       verifyBiometricMutation.mutate({
         faceImageData,
         livenessData
       });
-      
+
     } catch (error) {
       console.error('Liveness check error:', error);
       
@@ -300,11 +307,17 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
                 {instructions.map((instruction, index) => (
                   <div key={index} className="flex items-center space-x-3">
                     <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                      index <= currentInstruction ? 'bg-blue-600 text-white' : 'bg-muted text-muted-foreground'
+                      completedSteps[index] ? 'bg-green-600 text-white' : index === currentInstruction ? 'bg-blue-600 text-white' : 'bg-muted text-muted-foreground'
                     }`}>
                       {index + 1}
                     </div>
-                    <span className={index <= currentInstruction ? 'text-blue-800' : 'text-muted-foreground'}>
+                    <span className={
+                      completedSteps[index]
+                        ? 'text-green-800'
+                        : index === currentInstruction
+                        ? 'text-blue-800'
+                        : 'text-muted-foreground'
+                    }>
                       {instruction}
                     </span>
                   </div>

@@ -6,12 +6,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Home from "@/pages/home";
 import Verification from "@/pages/verification";
 import NotFound from "@/pages/not-found";
+import TestFaceApi from "@/pages/TestFaceApi";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/verification/:sessionId?" component={Verification} />
+      <Route path="/TestFaceApi" component={TestFaceApi} /> {/* Add this line */}
       <Route component={NotFound} />
     </Switch>
   );
