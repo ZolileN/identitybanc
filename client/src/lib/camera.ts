@@ -21,8 +21,10 @@ export async function startCamera(
   videoElement: HTMLVideoElement | null,
   deviceId?: string
 ): Promise<void> {
-  // Check if video element exists
+  console.log('Starting camera with device:', deviceId || 'default');
+  
   if (!videoElement) {
+    console.error('Video element is not provided');
     throw new Error('Video element is not provided');
   }
 
@@ -38,11 +40,14 @@ export async function startCamera(
     audio: false
   };
 
+  console.log('Requesting camera with constraints:', constraints);
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    console.log('Got camera stream:', stream.id);
     
-    // Check if the video element is still valid
     if (!videoElement || !document.body.contains(videoElement)) {
+      console.error('Video element is no longer in the document');
       stream.getTracks().forEach(track => track.stop());
       throw new Error('Video element is no longer in the document');
     }
@@ -50,63 +55,21 @@ export async function startCamera(
     videoElement.srcObject = stream;
     currentStream = stream;
 
-    return new Promise((resolve, reject) => {
-      const onLoaded = () => {
-        videoElement?.play()
-          .then(resolve)
-          .catch(error => {
-            console.error('Video play error:', error);
-            reject(new Error('Failed to play video stream'));
-          });
-      };
-
-      const onError = (error: Event | string) => {
-        console.error('Video error:', error);
-        reject(new Error('Error initializing video stream'));
-      };
-
-      videoElement.onloadedmetadata = onLoaded;
-      videoElement.onerror = onError;
-
-      // Clean up event listeners after they're no longer needed
-      const cleanup = () => {
-        videoElement.onloadedmetadata = null;
-        videoElement.onerror = null;
-      };
-
-      // Set a timeout in case the video never loads
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Video stream initialization timed out'));
-      }, 10000);
-
-      // Clean up on resolve/reject
-      Promise.resolve()
-        .then(() => videoElement.onloadedmetadata)
-        .finally(() => {
-          clearTimeout(timeout);
-          cleanup();
+    // Wait for the video to be ready
+    return new Promise((resolve) => {
+      videoElement.onloadedmetadata = () => {
+        videoElement.play().then(() => {
+          console.log('Video is playing');
+          resolve();
+        }).catch(err => {
+          console.error('Error playing video:', err);
+          throw new Error('Could not play video: ' + err.message);
         });
+      };
     });
   } catch (error) {
-    console.error('Camera access error:', error);
-    
-    let errorMessage = 'Failed to access camera';
-    if (error instanceof Error) {
-      if (error.name === 'NotAllowedError') {
-        errorMessage = 'Camera access was denied. Please grant camera permissions to continue.';
-      } else if (error.name === 'NotFoundError') {
-        errorMessage = 'No camera found. Please connect a camera and try again.';
-      } else if (error.name === 'NotReadableError') {
-        errorMessage = 'Camera is already in use by another application.';
-      } else if (error.name === 'OverconstrainedError') {
-        errorMessage = 'The requested camera configuration is not supported.';
-      } else if (error instanceof DOMException) {
-        errorMessage = `Camera error: ${error.message}`;
-      }
-    }
-    
-    throw new Error(errorMessage);
+    console.error('Error in startCamera:', error);
+    throw error;
   }
 }
 
