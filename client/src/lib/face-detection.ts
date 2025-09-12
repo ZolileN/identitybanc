@@ -12,26 +12,45 @@ interface LivenessData {
 // Constants
 const EYE_AR_THRESHOLD = 0.23;
 const HEAD_ANGLE_THRESHOLD = 20;
+const MAX_FRAME_RATE = 15; // Target 15 FPS for face detection
+const POSE_ESTIMATION_INTERVAL = 3; // Process head pose every 3 frames
 
 // State
 let eyeAspectRatios: number[] = [];
 let blinkCounter = 0;
 let headPositions: { yaw: number; pitch: number }[] = [];
+let lastFrameTime = 0;
+let frameCount = 0;
+
+// Optimized face detector options
+const faceDetectorOptions = new faceapi.TinyFaceDetectorOptions({
+  inputSize: 320,  // Smaller input size for faster processing
+  scoreThreshold: 0.5,  // Slightly lower threshold for better detection
+});
 
 // Helper functions
+function shouldProcessFrame(): boolean {
+  const now = performance.now();
+  const timeSinceLastFrame = now - lastFrameTime;
+  const targetFrameTime = 1000 / MAX_FRAME_RATE;
+  
+  if (timeSinceLastFrame >= targetFrameTime) {
+    lastFrameTime = now - (timeSinceLastFrame % targetFrameTime);
+    return true;
+  }
+  return false;
+}
+
 function getEyeAspectRatio(eye: faceapi.Point[]): number {
-  const v1 = faceapi.euclideanDistance(
-    [eye[1].x, eye[1].y] as [number, number],
-    [eye[5].x, eye[5].y] as [number, number]
-  );
-  const v2 = faceapi.euclideanDistance(
-    [eye[2].x, eye[2].y] as [number, number],
-    [eye[4].x, eye[4].y] as [number, number]
-  );
-  const h = faceapi.euclideanDistance(
-    [eye[0].x, eye[0].y] as [number, number],
-    [eye[3].x, eye[3].y] as [number, number]
-  );
+  // Use direct array access for better performance
+  const p1 = eye[1]; const p5 = eye[5];
+  const p2 = eye[2]; const p4 = eye[4];
+  const p0 = eye[0]; const p3 = eye[3];
+  
+  const v1 = Math.hypot(p5.x - p1.x, p5.y - p1.y);
+  const v2 = Math.hypot(p4.x - p2.x, p4.y - p2.y);
+  const h = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+  
   return (v1 + v2) / (2 * h);
 }
 
@@ -49,11 +68,24 @@ interface HeadPose {
 }
 
 export async function detectLiveness(videoElement: HTMLVideoElement): Promise<LivenessData> {
+  // Skip frames to maintain target frame rate
+  if (!shouldProcessFrame()) {
+    return {
+      blinkDetected: false,
+      headMovement: false,
+      facePresent: false,
+      faceAngle: { pitch: 0, roll: 0, yaw: 0 },
+      eyeAspectRatio: 0,
+      timestamp: Date.now(),
+    };
+  }
+
   let detections;
   
   try {
+    // Use optimized face detector options
     detections = await faceapi
-      .detectAllFaces(videoElement, new faceapi.TinyFaceDetectorOptions())
+      .detectAllFaces(videoElement, faceDetectorOptions)
       .withFaceLandmarks();
   } catch (error) {
     console.error('Face detection error:', error);
@@ -96,23 +128,28 @@ export async function detectLiveness(videoElement: HTMLVideoElement): Promise<Li
   let yaw = 0;
   let roll = 0;
 
-  try {
-    // Try to estimate head pose if available in the API
-    if ('estimateHeadPose' in faceapi) {
-      const size = {
-        width: videoElement.videoWidth,
-        height: videoElement.videoHeight
-      };
-      
-      const pose = (faceapi.estimateHeadPose as any)(landmarks, size) as HeadPose;
-      if (pose && pose.rotation) {
-        pitch = pose.rotation.pitch || 0;
-        yaw = pose.rotation.yaw || 0;
-        roll = pose.rotation.roll || 0;
+  // Only estimate head pose every N frames to improve performance
+  const shouldEstimatePose = frameCount % POSE_ESTIMATION_INTERVAL === 0;
+  
+  if (shouldEstimatePose) {
+    try {
+      // Try to estimate head pose if available in the API
+      if ('estimateHeadPose' in faceapi) {
+        const size = {
+          width: videoElement.videoWidth,
+          height: videoElement.videoHeight
+        };
+        
+        const pose = (faceapi.estimateHeadPose as any)(landmarks, size) as HeadPose;
+        if (pose?.rotation) {
+          pitch = pose.rotation.pitch || 0;
+          yaw = pose.rotation.yaw || 0;
+          roll = pose.rotation.roll || 0;
+        }
       }
+    } catch (error) {
+      console.warn('Head pose estimation failed:', error);
     }
-  } catch (error) {
-    console.warn('Head pose estimation failed:', error);
   }
 
   // Track head positions
@@ -128,6 +165,8 @@ export async function detectLiveness(videoElement: HTMLVideoElement): Promise<Li
                   Math.abs(last.pitch - first.pitch) > HEAD_ANGLE_THRESHOLD;
   }
 
+  frameCount++;
+  
   return {
     blinkDetected: blinkCounter >= 2,
     headMovement,
