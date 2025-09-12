@@ -19,18 +19,20 @@ interface BiometricVerificationProps {
 
 export default function BiometricVerification({ sessionId, onNext }: BiometricVerificationProps) {
   const [cameraStarted, setCameraStarted] = useState(false);
-  const [currentInstruction, setCurrentInstruction] = useState(0);
-  const [completedSteps, setCompletedSteps] = useState<boolean[]>([false, false, false]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isVideoReady, setIsVideoReady] = useState(false);
+  const [livenessStatus, setLivenessStatus] = useState({
+    facePresent: false,
+    blinkDetected: false,
+    headMovement: false,
+    instructions: [
+      "Please position your face in the frame",
+      "Blink twice when prompted",
+      "Slowly turn your head left and right"
+    ]
+  });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const detectionInterval = useRef<NodeJS.Timeout>();
   const { toast } = useToast();
-
-  const instructions = [
-    "Look directly at the camera",
-    "Blink twice when prompted",
-    "Turn head left and right"
-  ];
 
   const verifyBiometricMutation = useMutation({
     mutationFn: async (data: { faceImageData: string; livenessData: any }) => {
@@ -61,191 +63,108 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
     },
   });
 
+  // Load face-api models when component mounts
   useEffect(() => {
-    const videoElement = videoRef.current;
-    if (!videoElement) return;
-
-    const handleCanPlay = () => {
-      setIsVideoReady(true);
+    const init = async () => {
+      try {
+        await loadFaceApiModels();
+      } catch (error) {
+        console.error('Failed to load models:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load face detection. Please refresh the page.",
+          variant: "destructive",
+        });
+      }
     };
+    init();
 
-    videoElement.addEventListener('canplay', handleCanPlay);
-    
     return () => {
-      videoElement.removeEventListener('canplay', handleCanPlay);
+      if (detectionInterval.current) clearInterval(detectionInterval.current);
       stopCamera();
+      resetLivenessDetection();
     };
   }, []);
 
   const startVerification = async () => {
-    const videoElement = videoRef.current;
-    
-    if (!videoElement) {
-      toast({
-        title: "Camera Error",
-        description: "Video element is not available. Please try refreshing the page.",
-        variant: "destructive",
-      });
-      return;
-    }
+    if (!videoRef.current) return;
 
     try {
+      await startCamera(videoRef.current);
       setCameraStarted(true);
-      setIsVideoReady(false);
       
-      // Ensure the video element is visible and properly sized
-      videoElement.style.display = 'block';
-      videoElement.style.width = '100%';
-      videoElement.style.height = 'auto';
-      
-      // Start camera with error handling
-      try {
-        await startCamera(videoElement);
-      } catch (error) {
-        console.error('Camera initialization error:', error);
-        throw error;
-      }
-
-      // Wait for video to be ready to play
-      await new Promise<void>((resolve, reject) => {
-        if (videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
-          resolve();
-          return;
-        }
-
-        const onCanPlay = () => {
-          cleanup();
-          resolve();
-        };
-
-        const onError = (e: Event) => {
-          cleanup();
-          reject(new Error('Video playback error'));
-        };
-
-        const cleanup = () => {
-          videoElement.removeEventListener('canplay', onCanPlay);
-          videoElement.removeEventListener('error', onError);
-          clearTimeout(timeout);
-        };
-
-        videoElement.addEventListener('canplay', onCanPlay, { once: true });
-        videoElement.addEventListener('error', onError, { once: true });
+      // Start liveness detection
+      detectionInterval.current = setInterval(async () => {
+        if (!videoRef.current) return;
         
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error('Video playback timed out'));
-        }, 5000);
-      });
-      
-      // Start liveness detection sequence after a short delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      await performLivenessCheck();
-      
-    } catch (error) {
-      console.error('Verification error:', error);
-      setCameraStarted(false);
-      stopCamera();
-      
-      let errorMessage = 'Failed to access camera. Please check permissions and try again.';
-      
-      if (error instanceof Error) {
-        if (error.name === 'NotAllowedError') {
-          errorMessage = 'Camera access was denied. Please allow camera access to continue.';
-        } else if (error.name === 'NotFoundError') {
-          errorMessage = 'No camera found. Please connect a camera and try again.';
-        } else if (error.message.includes('Video element')) {
-          errorMessage = 'Video element is not available. Please refresh the page and try again.';
-        } else if (error.message.includes('timed out')) {
-          errorMessage = 'Camera is taking too long to start. Please try again.';
+        try {
+          const result = await detectLiveness(videoRef.current);
+          
+          setLivenessStatus(prev => ({
+            ...prev,
+            facePresent: result.facePresent,
+            blinkDetected: result.blinkDetected,
+            headMovement: result.headMovement
+          }));
+
+          // Auto-proceed when liveness is detected
+          if (result.blinkDetected && result.headMovement) {
+            handleVerificationComplete();
+          }
+        } catch (error) {
+          console.error('Liveness detection error:', error);
         }
-      }
-      
+      }, 300);
+
+    } catch (error) {
+      console.error('Camera error:', error);
       toast({
         title: "Camera Error",
-        description: errorMessage,
+        description: "Could not access the camera. Please check permissions.",
         variant: "destructive",
       });
     }
   };
 
-  const performLivenessCheck = async () => {
-    if (!videoRef.current) {
-      toast({
-        title: "Verification Error",
-        description: "Video element is not available",
-        variant: "destructive",
-      });
-      return;
-    }
-
+  const handleVerificationComplete = async () => {
+    if (!videoRef.current) return;
+    
     setIsProcessing(true);
-
+    
     try {
-      await loadFaceApiModels();
-
-      // Step 1: Look directly at the camera
-      setCurrentInstruction(0);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      let faceImageData = captureFrame(videoRef.current);
-      if (!faceImageData || faceImageData === 'data:,') throw new Error('Failed to capture frame from camera');
-      let livenessData = await detectLiveness(videoRef.current);
-      setCompletedSteps([true, false, false]);
-
-      // Step 2: Blink twice
-      setCurrentInstruction(1);
-      toast({ title: "Blink twice", description: "Please blink twice for the camera." });
-      const blinked = await waitForBlink(videoRef.current, 2, 8000);
-      if (!blinked) throw new Error('Blink not detected');
-      setCompletedSteps([true, true, false]);
-
-      // Step 3: Turn head left and right
-      setCurrentInstruction(2);
-      toast({ title: "Turn head", description: "Please turn your head left and right." });
-      const turned = await waitForHeadTurn(videoRef.current, 8000);
-      if (!turned) throw new Error('Head turn not detected');
-      setCompletedSteps([true, true, true]);
-
-      // Submit after all steps
-      verifyBiometricMutation.mutate({
-        faceImageData,
-        livenessData
-      });
-
-    } catch (error) {
-      console.error('Liveness check error:', error);
-      
-      let errorMessage = 'Could not complete liveness detection. Please try again.';
-      
-      if (error instanceof Error) {
-        if (error.message.includes('permission')) {
-          errorMessage = 'Camera permission denied. Please allow camera access and try again.';
-        } else if (error.message.includes('face') || error.message.includes('detect')) {
-          errorMessage = 'Could not detect face. Please ensure your face is clearly visible.';
-        } else if (error.message.includes('frame')) {
-          errorMessage = 'Failed to capture image. Please try again.';
+      const imageData = captureFrame(videoRef.current);
+      await verifyBiometricMutation.mutateAsync({
+        faceImageData: imageData,
+        livenessData: {
+          blinkDetected: livenessStatus.blinkDetected,
+          headMovement: livenessStatus.headMovement,
+          timestamp: Date.now()
         }
-      }
-      
+      });
+    } catch (error) {
+      console.error('Verification error:', error);
       toast({
         title: "Verification Failed",
-        description: errorMessage,
+        description: "An error occurred during verification. Please try again.",
         variant: "destructive",
       });
-      
-      // Stop camera on error to reset the state
-      stopCamera();
-      setCameraStarted(false);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
+  const resetLivenessDetection = () => {
+    setLivenessStatus({
+      facePresent: false,
+      blinkDetected: false,
+      headMovement: false,
+      instructions: [
+        "Please position your face in the frame",
+        "Blink twice when prompted",
+        "Slowly turn your head left and right"
+      ]
+    });
+  };
 
   return (
     <Card className="p-8" data-testid="biometric-verification-card">
@@ -304,18 +223,20 @@ export default function BiometricVerification({ sessionId, onNext }: BiometricVe
             <AlertDescription className="text-blue-800" data-testid="text-liveness-instructions">
               <h3 className="font-medium mb-3">Liveness Detection Steps</h3>
               <div className="space-y-3">
-                {instructions.map((instruction, index) => (
+                {livenessStatus.instructions.map((instruction, index) => (
                   <div key={index} className="flex items-center space-x-3">
                     <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                      completedSteps[index] ? 'bg-green-600 text-white' : index === currentInstruction ? 'bg-blue-600 text-white' : 'bg-muted text-muted-foreground'
+                      index === 0 && livenessStatus.facePresent ? 'bg-green-600 text-white' : index === 1 && livenessStatus.blinkDetected ? 'bg-green-600 text-white' : index === 2 && livenessStatus.headMovement ? 'bg-green-600 text-white' : 'bg-muted text-muted-foreground'
                     }`}>
                       {index + 1}
                     </div>
                     <span className={
-                      completedSteps[index]
+                      index === 0 && livenessStatus.facePresent
                         ? 'text-green-800'
-                        : index === currentInstruction
-                        ? 'text-blue-800'
+                        : index === 1 && livenessStatus.blinkDetected
+                        ? 'text-green-800'
+                        : index === 2 && livenessStatus.headMovement
+                        ? 'text-green-800'
                         : 'text-muted-foreground'
                     }>
                       {instruction}
