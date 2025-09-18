@@ -5,7 +5,8 @@
     "build",
     "dist",
     "**/*.test.ts",
-    "node_modules/@tensorflow-models/blazeface/tsconfig.json"
+    "**/node_modules/@tensorflow-models/**/tsconfig.json",
+    "**/node_modules/@tensorflow/tfjs-backend-webgl/tsconfig.json"
   ],
   "compilerOptions": {
     "incremental": true,
@@ -17,6 +18,7 @@
     "jsx": "preserve",
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
     "baseUrl": ".",

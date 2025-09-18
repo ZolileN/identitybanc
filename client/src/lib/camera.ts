@@ -18,58 +18,38 @@ export async function getCameraDevices(): Promise<MediaDeviceInfo[]> {
 }
 
 export async function startCamera(
-  videoElement: HTMLVideoElement | null,
-  deviceId?: string
+  videoElement: HTMLVideoElement,
+  constraints: MediaStreamConstraints = {
+    video: {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      facingMode: 'user'
+    }
+  }
 ): Promise<void> {
-  console.log('Starting camera with device:', deviceId || 'default');
+  console.log('Starting camera with constraints:', constraints);
   
   if (!videoElement) {
-    console.error('Video element is not provided');
-    throw new Error('Video element is not provided');
+    throw new Error('Video element is required');
   }
 
   // Stop any existing stream first
   stopCamera();
 
-  const constraints: MediaStreamConstraints = {
-    video: {
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' })
-    },
-    audio: false
-  };
-
-  console.log('Requesting camera with constraints:', constraints);
-
   try {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    console.log('Got camera stream:', stream.id);
-    
-    if (!videoElement || !document.body.contains(videoElement)) {
-      console.error('Video element is no longer in the document');
-      stream.getTracks().forEach(track => track.stop());
-      throw new Error('Video element is no longer in the document');
-    }
-
-    videoElement.srcObject = stream;
     currentStream = stream;
-
+    videoElement.srcObject = stream;
+    
     // Wait for the video to be ready
-    return new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       videoElement.onloadedmetadata = () => {
-        videoElement.play().then(() => {
-          console.log('Video is playing');
-          resolve();
-        }).catch(err => {
-          console.error('Error playing video:', err);
-          throw new Error('Could not play video: ' + err.message);
-        });
+        videoElement.play().then(resolve).catch(console.error);
       };
     });
   } catch (error) {
-    console.error('Error in startCamera:', error);
-    throw error;
+    console.error('Error accessing camera:', error);
+    throw new Error('Could not access the camera. Please ensure you have granted camera permissions.');
   }
 }
 

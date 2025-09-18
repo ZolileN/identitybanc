@@ -1,6 +1,8 @@
 import * as tf from '@tensorflow/tfjs';
 import * as blazeface from '@tensorflow-models/blazeface';
-import * as faceapi from 'face-api.js';
+import * as mobilenet from '@tensorflow-models/mobilenet';
+import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
+import '@tensorflow/tfjs-backend-webgl';
 
 interface LivenessData {
   blinkDetected: boolean;
@@ -11,10 +13,17 @@ interface LivenessData {
   timestamp: number;
 }
 
+interface MobileNetModel {
+  infer: (
+    img: tf.Tensor3D | ImageData | HTMLImageElement | HTMLCanvasElement | HTMLVideoElement,
+    embedding?: boolean
+  ) => tf.Tensor2D;
+}
+
 // Constants
 const EYE_AR_THRESHOLD = 0.23;
 const HEAD_ANGLE_THRESHOLD = 20;
-const MAX_FRAME_RATE = 30; // Increased from 15 to 30 FPS with BlazeFace
+const MAX_FRAME_RATE = 30;
 const POSE_ESTIMATION_INTERVAL = 3;
 
 // State
@@ -23,28 +32,87 @@ let blinkCounter = 0;
 let headPositions: { yaw: number; pitch: number }[] = [];
 let lastFrameTime = 0;
 let frameCount = 0;
-let model: blazeface.BlazeFaceModel | null = null;
 
-// Initialize BlazeFace model
+// Models
+let faceDetector: blazeface.BlazeFaceModel | null = null;
+let mobileNet: MobileNetModel | null = null;
+let faceLandmarkModel: any = null;
+
+// Model loading state
 let isModelLoading = false;
-let modelLoadPromise: Promise<blazeface.BlazeFaceModel> | null = null;
+let modelLoadPromise: Promise<void> | null = null;
 
-async function loadModel(): Promise<blazeface.BlazeFaceModel> {
-  if (model) return model;
-  if (isModelLoading && modelLoadPromise) return modelLoadPromise;
-  
+// Helper function for default response
+function getDefaultLivenessData(reason: string): LivenessData {
+  console.log('Returning default liveness data:', reason);
+  return {
+    blinkDetected: false,
+    headMovement: false,
+    facePresent: false,
+    faceAngle: { pitch: 0, roll: 0, yaw: 0 },
+    eyeAspectRatio: 0,
+    timestamp: Date.now(),
+  };
+}
+
+export async function loadModels() {
+  if (faceDetector && mobileNet && faceLandmarkModel) {
+    console.log('Models already loaded');
+    return;
+  }
+
+  if (isModelLoading && modelLoadPromise) {
+    console.log('Models are already loading...');
+    return modelLoadPromise;
+  }
+
+  console.log('Loading models...');
   isModelLoading = true;
-  modelLoadPromise = blazeface.load({
-    maxFaces: 1,
-    inputWidth: 128,
-    inputHeight: 128,
-    iouThreshold: 0.3,
-    scoreThreshold: 0.75
-  });
-  
+
   try {
-    model = await modelLoadPromise;
-    return model;
+    modelLoadPromise = Promise.all([
+      // Load BlazeFace for face detection
+      blazeface.load({
+        maxFaces: 1,
+        inputWidth: 128,
+        inputHeight: 128,
+        iouThreshold: 0.3,
+        scoreThreshold: 0.75
+      }),
+      
+      // Load MobileNet for feature extraction
+      (async () => {
+        const model = await mobilenet.load();
+        return {
+          infer: (img: any, embedding = false) => {
+            return model.infer(img, embedding) as tf.Tensor2D;
+          }
+        };
+      })(),
+      
+      // Load Face Landmark Detection
+faceLandmarksDetection.createDetector(
+  faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
+  {
+    runtime: 'mediapipe',
+    maxFaces: 1,
+    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
+    refineLandmarks: true
+  }
+)
+    ]).then(([blazeFaceModel, mobilenetModel, landmarkModel]) => {
+      faceDetector = blazeFaceModel;
+      mobileNet = mobilenetModel as MobileNetModel;
+      faceLandmarkModel = landmarkModel;
+      console.log('All models loaded successfully');
+    });
+
+    await modelLoadPromise;
+  } catch (error) {
+    console.error('Error loading models:', error);
+    isModelLoading = false;
+    modelLoadPromise = null;
+    throw new Error(`Failed to load models: ${error instanceof Error ? error.message : 'Unknown error'}`);
   } finally {
     isModelLoading = false;
   }
@@ -63,34 +131,6 @@ function shouldProcessFrame(): boolean {
   return false;
 }
 
-function getEyeAspectRatio(landmarks: number[][]): number {
-  // BlazeFace returns 6 facial landmarks in this order:
-  // right eye, left eye, nose, mouth, right ear, left ear
-  const rightEye = landmarks[0];
-  const leftEye = landmarks[1];
-  
-  // Calculate eye aspect ratio for both eyes and average them
-  const rightEAR = calculateEAR([
-    [rightEye[0], rightEye[1]],
-    [rightEye[2], rightEye[3]],
-    [rightEye[4], rightEye[5]],
-    [rightEye[6], rightEye[7]],
-    [rightEye[8], rightEye[9]],
-    [rightEye[10], rightEye[11]]
-  ]);
-  
-  const leftEAR = calculateEAR([
-    [leftEye[0], leftEye[1]],
-    [leftEye[2], leftEye[3]],
-    [leftEye[4], leftEye[5]],
-    [leftEye[6], leftEye[7]],
-    [leftEye[8], leftEye[9]],
-    [leftEye[10], leftEye[11]]
-  ]);
-  
-  return (rightEAR + leftEAR) / 2;
-}
-
 function calculateEAR(eyePoints: number[][]): number {
   // Calculate vertical distances
   const v1 = Math.hypot(
@@ -101,7 +141,6 @@ function calculateEAR(eyePoints: number[][]): number {
     eyePoints[2][0] - eyePoints[4][0],
     eyePoints[2][1] - eyePoints[4][1]
   );
-  
   // Calculate horizontal distance
   const h = Math.hypot(
     eyePoints[0][0] - eyePoints[3][0],
@@ -111,116 +150,117 @@ function calculateEAR(eyePoints: number[][]): number {
   return (v1 + v2) / (2 * h);
 }
 
-interface HeadPose {
-  rotation: {
-    pitch: number;
-    yaw: number;
-    roll: number;
-  };
-  translation: {
-    x: number;
-    y: number;
-    z: number;
-  };
-}
-
 export async function detectLiveness(videoElement: HTMLVideoElement): Promise<LivenessData> {
-  // Early exit if already detected in previous frames
-  if (blinkCounter >= 2 && headPositions.length > 1) {
-    const first = headPositions[0];
-    const last = headPositions[headPositions.length - 1];
-    const headMovement = Math.abs(last.yaw - first.yaw) > HEAD_ANGLE_THRESHOLD ||
-                         Math.abs(last.pitch - first.pitch) > HEAD_ANGLE_THRESHOLD;
-    if (headMovement) {
-      return {
-        blinkDetected: true,
-        headMovement: true,
-        facePresent: true,
-        faceAngle: { pitch: last.pitch, roll: 0, yaw: last.yaw },
-        eyeAspectRatio: eyeAspectRatios[eyeAspectRatios.length - 1] || 0,
-        timestamp: Date.now(),
-      };
+  // Add video element validation
+  if (!videoElement || !videoElement.videoWidth || !videoElement.videoHeight) {
+    console.error('Video element not properly initialized');
+    return getDefaultLivenessData('Video element not ready');
+  }
+
+  // Load models if not already loaded
+  if (!faceDetector || !mobileNet || !faceLandmarkModel) {
+    try {
+      console.log('Models not loaded, loading now...');
+      await loadModels();
+    } catch (error) {
+      console.error('Failed to load models:', error);
+      return getDefaultLivenessData('Failed to load models');
     }
   }
 
   // Skip frames to maintain target frame rate
-  if (!shouldProcessFrame()) {
-    return {
-      blinkDetected: false,
-      headMovement: false,
-      facePresent: false,
-      faceAngle: { pitch: 0, roll: 0, yaw: 0 },
-      eyeAspectRatio: 0,
-      timestamp: Date.now(),
-    };
+  if (!faceDetector) {
+    console.warn('Face detector not initialized');
+    return getDefaultLivenessData('Face detector not ready');
   }
-
-  // Initialize model if not loaded
-  if (!model) {
-    try {
-      await loadModel();
-      if (!model) {
-        throw new Error('Failed to load BlazeFace model');
-      }
-    } catch (error) {
-      console.error('Error loading BlazeFace model:', error);
-      return {
-        blinkDetected: false,
-        headMovement: false,
-        facePresent: false,
-        faceAngle: { pitch: 0, roll: 0, yaw: 0 },
-        eyeAspectRatio: 0,
-        timestamp: Date.now(),
-      };
-    }
-  }
-
   try {
-    // Run face detection
-    if (!model) {
-      throw new Error('Model not loaded');
-    }
+  // Now TypeScript knows faceDetector is not null
+  const predictions = await faceDetector.estimateFaces(videoElement, false);
     
-    const predictions = await model.estimateFaces(videoElement, false);
-    
-    if (!predictions || predictions.length === 0) {
-      return {
-        blinkDetected: false,
-        headMovement: false,
-        facePresent: false,
-        faceAngle: { pitch: 0, roll: 0, yaw: 0 },
-        eyeAspectRatio: 0,
-        timestamp: Date.now(),
-      };
+  if (!predictions || predictions.length === 0) {
+      return getDefaultLivenessData('No faces detected');
     }
 
-    // Get the first face prediction
-    const face = predictions[0];
+    // Get face landmarks for more accurate eye detection
+    const faces = await faceLandmarkModel.estimateFaces({
+      input: videoElement,
+      returnTensors: false,
+      flipHorizontal: false,
+      predictIrises: true
+    });
+
+    if (!faces || faces.length === 0) {
+      return getDefaultLivenessData('No face landmarks detected');
+    }
+
+    const face = faces[0];
+    const keypoints = face.scaledMesh;
     
-    // Calculate EAR (Eye Aspect Ratio)
-    const ear = getEyeAspectRatio(face.landmarks as number[][]);
+    // Calculate eye aspect ratio (EAR)
+    const leftEye = [
+      keypoints[33], keypoints[160], keypoints[158], 
+      keypoints[133], keypoints[153], keypoints[144]
+    ];
+    const rightEye = [
+      keypoints[362], keypoints[385], keypoints[387],
+      keypoints[263], keypoints[373], keypoints[380]
+    ];
+    
+    const leftEAR = calculateEAR(leftEye);
+    const rightEAR = calculateEAR(rightEye);
+    const ear = (leftEAR + rightEAR) / 2;
+    
+    // Detect blink
     eyeAspectRatios.push(ear);
-    
-    // Detect blinks
-    if (ear < EYE_AR_THRESHOLD) {
-      blinkCounter++;
+    if (eyeAspectRatios.length > 5) {
+      eyeAspectRatios.shift();
+      
+      // Check for blink (temporary drop in EAR)
+      const avgEAR = eyeAspectRatios.reduce((a, b) => a + b, 0) / eyeAspectRatios.length;
+      if (ear < avgEAR * 0.7) {
+        blinkCounter++;
+      }
     }
     
-    // Simplified head pose estimation (pitch and yaw)
-    // Note: You might want to implement proper head pose estimation using the landmarks
-    const pitch = 0;
-    const yaw = 0;
+    // Simple head pose estimation (using nose position)
+    const nose = keypoints[1];
+    const leftMouth = keypoints[61];
+    const rightMouth = keypoints[291];
     
+    const mouthWidth = Math.hypot(
+      rightMouth[0] - leftMouth[0],
+      rightMouth[1] - leftMouth[1]
+    );
+    
+    const noseToMouth = Math.hypot(
+      nose[0] - (leftMouth[0] + rightMouth[0]) / 2,
+      nose[1] - (leftMouth[1] + rightMouth[1]) / 2
+    );
+    
+    // Simple head pose estimation (pitch and yaw)
+    const pitch = (nose[1] - videoElement.videoHeight / 2) / (videoElement.videoHeight / 2);
+    const yaw = (nose[0] - videoElement.videoWidth / 2) / (videoElement.videoWidth / 2);
+    
+    // Track head positions
     headPositions.push({ pitch, yaw });
-    
-    // Keep only recent frames
     if (headPositions.length > 30) {
       headPositions.shift();
     }
     
+    // Check for head movement
+    let headMovement = false;
+    if (headPositions.length > 5) {
+      const first = headPositions[0];
+      const last = headPositions[headPositions.length - 1];
+      const deltaYaw = Math.abs(last.yaw - first.yaw);
+      const deltaPitch = Math.abs(last.pitch - first.pitch);
+      
+      headMovement = deltaYaw > 0.2 || deltaPitch > 0.2;
+    }
+    
     return {
-      blinkDetected: blinkCounter >= 2,
-      headMovement: false, // Will be determined in next frame
+      blinkDetected: blinkCounter > 0,
+      headMovement,
       facePresent: true,
       faceAngle: { pitch, roll: 0, yaw },
       eyeAspectRatio: ear,
@@ -229,14 +269,7 @@ export async function detectLiveness(videoElement: HTMLVideoElement): Promise<Li
     
   } catch (error) {
     console.error('Error in face detection:', error);
-    return {
-      blinkDetected: false,
-      headMovement: false,
-      facePresent: false,
-      faceAngle: { pitch: 0, roll: 0, yaw: 0 },
-      eyeAspectRatio: 0,
-      timestamp: Date.now(),
-    };
+    return getDefaultLivenessData('Error in face detection');
   }
 }
 
@@ -247,50 +280,74 @@ export function resetLivenessDetection(): void {
   headPositions = [];
   lastFrameTime = 0;
   frameCount = 0;
-  // Don't reset the model here, keep it loaded for better performance
 }
 
 export async function analyzeFaceMatch(idPhotoData: string, livePhotoData: string): Promise<number> {
-  // For face matching, we'll continue using face-api.js as it has better face recognition
-  const [idImage, liveImage] = await Promise.all([
-    faceapi.fetchImage(idPhotoData),
-    faceapi.fetchImage(livePhotoData)
-  ]);
-  
-  const [idDescriptor, liveDescriptor] = await Promise.all([
-    faceapi.detectSingleFace(idImage, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceDescriptor(),
-    faceapi.detectSingleFace(liveImage, new faceapi.TinyFaceDetectorOptions())
-      .withFaceLandmarks()
-      .withFaceDescriptor()
-  ]);
-
-  if (!idDescriptor || !liveDescriptor) {
-    throw new Error('Could not detect faces in one or both images');
+  if (!mobileNet) {
+    await loadModels();
+    if (!mobileNet) {
+      throw new Error('Failed to load MobileNet model');
+    }
   }
 
-  const distance = faceapi.euclideanDistance(
-    idDescriptor.descriptor,
-    liveDescriptor.descriptor
-  );
-
-  // Convert distance to similarity score (0-1)
-  return Math.max(0, 1 - distance / 1.5);
+  try {
+    // Convert base64 images to tensors
+    const idTensor = await loadImageTensor(idPhotoData);
+    const liveTensor = await loadImageTensor(livePhotoData);
+    
+    // Get embeddings
+    const idEmbedding = mobileNet.infer(idTensor, true);
+    const liveEmbedding = mobileNet.infer(liveTensor, true);
+    
+    // Calculate cosine similarity
+    const similarity = cosineSimilarity(
+      (await idEmbedding.array() as number[][])[0],
+      (await liveEmbedding.array() as number[][])[0]
+    );
+    
+    // Clean up
+    idTensor.dispose();
+    liveTensor.dispose();
+    
+    return similarity;
+  } catch (error) {
+    console.error('Error analyzing face match:', error);
+    throw new Error('Failed to analyze face match');
+  }
 }
 
-export function detectFraud(sessionData: any): Promise<boolean> {
-  // Mock fraud detection
-  // In production, this would analyze multiple factors:
-  // - Document authenticity
-  // - Behavioral biometrics
-  // - Device fingerprinting
-  // - Historical patterns
-  
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      // Mock: 95% chance of passing fraud check
-      resolve(Math.random() > 0.05);
-    }, 1000);
+async function loadImageTensor(imageData: string): Promise<tf.Tensor3D> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const tensor = tf.browser.fromPixels(img);
+      const resized = tf.image.resizeBilinear(tensor, [224, 224]);
+      const normalized = resized.toFloat().div(127).sub(1);
+      tf.dispose([tensor, resized]);
+      resolve(normalized as tf.Tensor3D);
+    };
+    img.onerror = reject;
+    img.src = imageData;
   });
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) {
+    throw new Error('Vectors must have the same length');
+  }
+  
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  normA = Math.sqrt(normA);
+  normB = Math.sqrt(normB);
+  
+  return dot / (normA * normB);
 }
