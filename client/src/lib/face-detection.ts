@@ -1,5 +1,4 @@
 import * as tf from '@tensorflow/tfjs';
-import * as blazeface from '@tensorflow-models/blazeface';
 import * as mobilenet from '@tensorflow-models/mobilenet';
 import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
 import '@tensorflow/tfjs-backend-webgl';
@@ -34,7 +33,6 @@ let lastFrameTime = 0;
 let frameCount = 0;
 
 // Models
-let faceDetector: blazeface.BlazeFaceModel | null = null;
 let mobileNet: MobileNetModel | null = null;
 let faceLandmarkModel: any = null;
 
@@ -56,7 +54,7 @@ function getDefaultLivenessData(reason: string): LivenessData {
 }
 
 export async function loadModels() {
-  if (faceDetector && mobileNet && faceLandmarkModel) {
+  if (mobileNet && faceLandmarkModel) {
     console.log('Models already loaded');
     return;
   }
@@ -71,15 +69,6 @@ export async function loadModels() {
 
   try {
     modelLoadPromise = Promise.all([
-      // Load BlazeFace for face detection
-      blazeface.load({
-        maxFaces: 1,
-        inputWidth: 128,
-        inputHeight: 128,
-        iouThreshold: 0.3,
-        scoreThreshold: 0.75
-      }),
-      
       // Load MobileNet for feature extraction
       (async () => {
         const model = await mobilenet.load();
@@ -91,17 +80,16 @@ export async function loadModels() {
       })(),
       
       // Load Face Landmark Detection
-faceLandmarksDetection.createDetector(
-  faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
-  {
-    runtime: 'mediapipe',
-    maxFaces: 1,
-    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
-    refineLandmarks: true
-  }
-)
-    ]).then(([blazeFaceModel, mobilenetModel, landmarkModel]) => {
-      faceDetector = blazeFaceModel;
+      faceLandmarksDetection.createDetector(
+        faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
+        {
+          runtime: 'mediapipe',
+          maxFaces: 1,
+          solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh',
+          refineLandmarks: true
+        }
+      )
+    ]).then(([mobilenetModel, landmarkModel]) => {
       mobileNet = mobilenetModel as MobileNetModel;
       faceLandmarkModel = landmarkModel;
       console.log('All models loaded successfully');
@@ -158,7 +146,7 @@ export async function detectLiveness(videoElement: HTMLVideoElement): Promise<Li
   }
 
   // Load models if not already loaded
-  if (!faceDetector || !mobileNet || !faceLandmarkModel) {
+  if (!mobileNet || !faceLandmarkModel) {
     try {
       console.log('Models not loaded, loading now...');
       await loadModels();
@@ -169,18 +157,11 @@ export async function detectLiveness(videoElement: HTMLVideoElement): Promise<Li
   }
 
   // Skip frames to maintain target frame rate
-  if (!faceDetector) {
-    console.warn('Face detector not initialized');
-    return getDefaultLivenessData('Face detector not ready');
+  if (!shouldProcessFrame()) {
+    return getDefaultLivenessData('Skipping frame');
   }
-  try {
-  // Now TypeScript knows faceDetector is not null
-  const predictions = await faceDetector.estimateFaces(videoElement, false);
-    
-  if (!predictions || predictions.length === 0) {
-      return getDefaultLivenessData('No faces detected');
-    }
 
+  try {
     // Get face landmarks for more accurate eye detection
     const faces = await faceLandmarkModel.estimateFaces({
       input: videoElement,

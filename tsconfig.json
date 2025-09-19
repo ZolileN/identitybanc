@@ -2,11 +2,10 @@
   "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
   "exclude": [
     "node_modules",
-    "build",
     "dist",
     "**/*.test.ts",
     "**/node_modules/@tensorflow-models/**/tsconfig.json",
-    "**/node_modules/@tensorflow/tfjs-backend-webgl/tsconfig.json"
+    "**/node_modules/@tensorflow/tfjs-*/**/tsconfig.json"
   ],
   "compilerOptions": {
     "incremental": true,
@@ -20,9 +19,9 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "allowImportingTsExtensions": true,
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "baseUrl": ".",
-    "types": ["node", "vite/client"],
+    "types": ["vite/client"],
     "paths": {
       "@/*": ["./client/src/*"],
       "@shared/*": ["./shared/*"]
